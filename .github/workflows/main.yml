@@ -1,0 +1,45 @@
+
+name: Inspect Samba de Amigo IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Prepare inspection tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip file python3
+
+      - name: Explain IPA upload requirement
+        run: |
+          echo "Unity IPA inspection environment ready."
+          echo "No commercial game files were downloaded."
+          echo "The IPA must be transferred separately."
+
+      - name: Create preliminary report
+        run: |
+          mkdir -p report
+          {
+            echo "Samba de Amigo: Party-To-Go"
+            echo "Target: Android ARM64"
+            echo "Source: iOS IPA"
+            echo "Engine: Unity (reported)"
+            echo
+            echo "Status: Waiting for secure IPA transfer."
+            echo "No executable or assets have been inspected yet."
+          } > report/status.txt
+
+      - name: Upload preliminary report
+        uses: actions/upload-artifact@v4
+        with:
+          name: unity-ipa-investigation-status
+          path: report/status.txt
+          retention-days: 3
