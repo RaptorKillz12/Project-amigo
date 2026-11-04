@@ -6,8 +6,11 @@ jobs:
   compile_unity_engines:
     runs-on: ubuntu-latest
     steps:
+      # FIX: Force a full git fetch depth so game-ci can read repository properties
       - name: Checkout Repository Source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # 1. Set up the open-source Linux build system tools needed for file injection
       - name: Setup System Compiler Utilities
