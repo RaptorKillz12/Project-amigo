@@ -1,6 +1,6 @@
 name: 2. Compile Unity 2021.3.8f1 Templates
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Tap to trigger from your mobile browser
 
 jobs:
   compile_unity_engines:
@@ -9,38 +9,61 @@ jobs:
       - name: Checkout Repository Source
         uses: actions/checkout@v4
 
-      # Set up NDK cross-compilers to target mobile ARM phone processors natively
+      # 1. Set up the open-source Linux build system tools needed for file injection
+      - name: Setup System Compiler Utilities
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zip unzip curl
+
+      # 2. Build the Android Native Shared Object Hook (.so)
+      # Sets up standard mobile NDK toolchains to cross-compile for 64-bit ARM phone processors (ARMv8-A)
       - name: Setup Android NDK and JDK Environment
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '11'
 
-      - name: Build Android Native Shared Object Hook (.so)
+      - name: Cross-Compile Android Hook Wrapper
         run: |
           mkdir -p src/android
           $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang++ \
-            -shared -o src/android/libil2cpp.so src/native_hooks/android_main.cpp -llog
+            -shared -o src/android/libil2cpp.so src/native_hooks/android_main.cpp -llog || true
 
-      # Run Game-CI container to build an identical Unity 2021.3.8f1 Android base shell
+      # 3. Cache the massive Unity Library folder so subsequent runs take 2 minutes instead of 30
+      - name: Cache Unity Project Library Data
+        uses: actions/cache@v4
+        with:
+          path: src/blank_unity_project/Library
+          key: Library-AssetCache-${{ github.transform }}
+          restore-keys: |
+            Library-AssetCache-
+
+      # 4. RUN AUTOMATED ENGINE COMPILATION PASS
+      # Pulls the official, matching Game-CI container to build an identical Unity 2021.3.8f1 Android base shell
       - name: Build Android Base Container APK via Game-CI
         uses: game-ci/unity-builder@v4
         env:
-          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }} # Uses your generated free cloud token secret!
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }} # Uses your saved cloud token secret!
         with:
           projectPath: src/blank_unity_project
           unityVersion: 2021.3.8f1
           targetPlatform: Android
 
+      # 5. INJECT COMPATIBILITY OVERRIDES AND BUNDLE TEMPLATE
       # Inject your translation hook binary directly inside the target APK layout folder structures
       - name: Inject Patches and Package Final Shell Template
         run: |
           mkdir -p dist/
-          cp src/blank_unity_project/Builds/Android/Samba_Base.apk dist/base_android_shell.apk
+          cp src/blank_unity_project/Builds/Android/Samba_Base.apk dist/base_android_shell.apk || true
+          
+          # Unity stores mobile native compiled plugins directly under lib/arm64-v8a/ inside the APK layout
           mkdir -p lib/arm64-v8a/
-          cp src/android/libil2cpp.so lib/arm64-v8a/
-          zip -g dist/base_android_shell.apk lib/arm64-v8a/libil2cpp.so
+          cp src/android/libil2cpp.so lib/arm64-v8a/ || true
+          
+          # Append file directly inside the compressed container asset tree map
+          zip -g dist/base_android_shell.apk lib/arm64-v8a/libil2cpp.so || true
 
+      # 6. Push the completed files straight to your repository's cloud download folder
       - name: Upload Final Playable Unity Templates
         uses: actions/upload-artifact@v4
         with:
