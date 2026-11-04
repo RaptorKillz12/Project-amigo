@@ -9,7 +9,8 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      # Uses the correct unityci namespace and image naming convention
+      # Uses || true to prevent Unity's expected exit code 1 from stopping the pipeline
+      # Added -nographics to make the headless dump run much faster
       - name: Create Manual Activation Request
         run: |
           mkdir -p unity_request
@@ -17,12 +18,12 @@ jobs:
           docker run --rm --user root \
             -v ${{ github.workspace }}/unity_request:/root/unity_request \
             unityci/editor:ubuntu-2021.3.8f1-base-3 \
-            unity-editor -batchmode -createManualActivationFile -logfile /dev/stdout
+            unity-editor -batchmode -nographics -quit -logfile /dev/stdout -createManualActivationFile || true
           
-          # Isolate the generated license request file 
+          # Safely extract and rename the newly dumped file
           mv unity_request/*.alf unity_request/Unity_v2021.3.8f1.alf || true
 
-      # Expose the .alf file right to your phone's browser as a zip download
+      # Expose the file to your mobile browser as a zip artifact
       - name: Upload License Request Token
         uses: actions/upload-artifact@v4
         with:
