@@ -1,0 +1,48 @@
+name: 2. Compile Unity 2021.3.8f1 Templates
+on:
+  workflow_dispatch:
+
+jobs:
+  compile_unity_engines:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository Source
+        uses: actions/checkout@v4
+
+      # Set up NDK cross-compilers to target mobile ARM phone processors natively
+      - name: Setup Android NDK and JDK Environment
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '11'
+
+      - name: Build Android Native Shared Object Hook (.so)
+        run: |
+          mkdir -p src/android
+          $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang++ \
+            -shared -o src/android/libil2cpp.so src/native_hooks/android_main.cpp -llog
+
+      # Run Game-CI container to build an identical Unity 2021.3.8f1 Android base shell
+      - name: Build Android Base Container APK via Game-CI
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }} # Uses your generated free cloud token secret!
+        with:
+          projectPath: src/blank_unity_project
+          unityVersion: 2021.3.8f1
+          targetPlatform: Android
+
+      # Inject your translation hook binary directly inside the target APK layout folder structures
+      - name: Inject Patches and Package Final Shell Template
+        run: |
+          mkdir -p dist/
+          cp src/blank_unity_project/Builds/Android/Samba_Base.apk dist/base_android_shell.apk
+          mkdir -p lib/arm64-v8a/
+          cp src/android/libil2cpp.so lib/arm64-v8a/
+          zip -g dist/base_android_shell.apk lib/arm64-v8a/libil2cpp.so
+
+      - name: Upload Final Playable Unity Templates
+        uses: actions/upload-artifact@v4
+        with:
+          name: Unity_Samba_Templates_2021_3_8f1
+          path: dist/
