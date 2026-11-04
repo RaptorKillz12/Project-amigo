@@ -9,17 +9,17 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      # Force the docker instance to run with root execution permissions
+      # Uses the correct unityci namespace and image naming convention
       - name: Create Manual Activation Request
         run: |
           mkdir -p unity_request
           chmod 777 unity_request
           docker run --rm --user root \
             -v ${{ github.workspace }}/unity_request:/root/unity_request \
-            unity3d/editor:2021.3.8f1-base-0 \
+            unityci/editor:ubuntu-2021.3.8f1-base-3 \
             unity-editor -batchmode -createManualActivationFile -logfile /dev/stdout
           
-          # Safely locate and isolate the newly generated activation token
+          # Isolate the generated license request file 
           mv unity_request/*.alf unity_request/Unity_v2021.3.8f1.alf || true
 
       # Expose the .alf file right to your phone's browser as a zip download
