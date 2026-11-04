@@ -9,21 +9,30 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      # Uses || true to prevent Unity's expected exit code 1 from stopping the pipeline
-      # Added -nographics to make the headless dump run much faster
+      # Runs the generation and uses a dynamic docker script to pull the file from internal layers
+      # The entrypoint is overridden to ensure we can execute sequential bash commands inside the container
       - name: Create Manual Activation Request
         run: |
           mkdir -p unity_request
           chmod 777 unity_request
-          docker run --rm --user root \
-            -v ${{ github.workspace }}/unity_request:/root/unity_request \
-            unityci/editor:ubuntu-2021.3.8f1-base-3 \
-            unity-editor -batchmode -nographics -quit -logfile /dev/stdout -createManualActivationFile || true
           
-          # Safely extract and rename the newly dumped file
-          mv unity_request/*.alf unity_request/Unity_v2021.3.8f1.alf || true
+          docker run --rm --user root \
+            --entrypoint /bin/bash \
+            -v ${{ github.workspace }}/unity_request:/mnt/unity_request \
+            unityci/editor:ubuntu-2021.3.8f1-base-3 \
+            -c "unity-editor -batchmode -nographics -createManualActivationFile -logfile /dev/stdout || true; find / -name '*.alf' -exec cp {} /mnt/unity_request/Unity_v2021.3.8f1.alf \; 2>/dev/null"
 
-      # Expose the file to your mobile browser as a zip artifact
+      # Verifies the file extracted correctly before passing it to the uploader module
+      - name: Verify Token Generation
+        run: |
+          if [ -f "unity_request/Unity_v2021.3.8f1.alf" ]; then
+            echo "Success: Activation token captured in host layer."
+          else
+            echo "Error: Target file not found in directory layer."
+            exit 1
+          fi
+
+      # Expose the .alf file right to your phone's browser as a zip download
       - name: Upload License Request Token
         uses: actions/upload-artifact@v4
         with:
