@@ -1,0 +1,24 @@
+name: 1. Generate Free Unity License File
+on:
+  workflow_dispatch: # Tap to trigger from your mobile browser
+
+jobs:
+  request_license:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      # Request a free personal activation file (.alf) from Unity's cloud server
+      - name: Request Activation File
+        uses: game-ci/unity-request-activation-file@v4
+        id: get_alf
+        with:
+          unityVersion: 2021.3.8f1
+
+      # Upload the activation file as an unzipped downloadable zip artifact to your phone
+      - name: Upload License Request Token
+        uses: actions/upload-artifact@v4
+        with:
+          name: Unity_v2021.3.8f1.alf
+          path: ${{ steps.get_alf.outputs.filePath }}
