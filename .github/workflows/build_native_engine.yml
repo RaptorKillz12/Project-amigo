@@ -1,0 +1,56 @@
+name: Build native engine
+
+on:
+  push:
+    branches:
+      - main
+      - "engine/**"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S engine -B build-windows -A x64
+      - name: Build
+        run: cmake --build build-windows --config Release
+      - name: Test
+        run: ctest --test-dir build-windows -C Release --output-on-failure
+      - name: Upload Windows runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: project-amigo-windows-x64
+          path: |
+            build-windows/Release/amigo_inspect.exe
+            build-windows/Release/amigo_runtime_tests.exe
+
+  android:
+    name: Android ARM64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Android NDK
+        uses: android-actions/setup-android@v3
+      - name: Install NDK 27.2.12479018
+        run: sdkmanager "ndk;27.2.12479018"
+      - name: Configure and build
+        run: |
+          cmake -S engine -B build-android \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-24 \
+            -DAMIGO_BUILD_ANDROID=ON \
+            -DAMIGO_BUILD_TESTS=OFF
+          cmake --build build-android --config Release
+      - name: Upload Android native library
+        uses: actions/upload-artifact@v4
+        with:
+          name: project-amigo-android-arm64
+          path: build-android/libproject_amigo.so
