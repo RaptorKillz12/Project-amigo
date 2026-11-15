@@ -30,15 +30,12 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Install Unity Editor & Android Build Support (No License Needed for Playback Engines)
-        run: |
-          wget -qO - https://hub.unity3d.com/linux/keys/public | gpg --dearmor | sudo tee /usr/share/keyrings/Unity_Technologies_ApS.gpg > /dev/null
-          sudo sh -c 'echo "deb [signed-by=/usr/share/keyrings/Unity_Technologies_ApS.gpg] https://hub.unity3d.com/linux/repos/deb stable main" > /etc/apt/sources.list.d/unityhub.list'
-          sudo apt-get update
-          sudo apt-get install -y unityhub xvfb
-
-          # Install exact Unity Editor + Android NDK/SDK/OpenJDK & PlaybackEngines
-          xvfb-run --auto-servernum unityhub --headless install --version "$UNITY_VERSION" --module android --cm
+      - name: Install Unity Editor & Android Build Support
+		run: |
+		# Install Unity Hub and resolve changeset via npx
+		sudo apt-get update && sudo apt-get install -y unityhub xvfb
+		CHANGESET=$(npx --yes unity-changeset "$UNITY_VERSION")
+		xvfb-run --auto-servernum unityhub --no-sandbox -- --headless install --version "\(UNITY_VERSION" --changeset "\)CHANGESET" --module android --cm
 
       - name: Extract Matching Unity Android Runtime Libraries
         run: |
