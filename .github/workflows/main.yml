@@ -31,11 +31,11 @@ jobs:
           distribution: 'temurin'
 
       - name: Install Unity Editor & Android Build Support
-		run: |
-		# Install Unity Hub and resolve changeset via npx
-		sudo apt-get update && sudo apt-get install -y unityhub xvfb
-		CHANGESET=$(npx --yes unity-changeset "$UNITY_VERSION")
-		xvfb-run --auto-servernum unityhub --no-sandbox -- --headless install --version "\(UNITY_VERSION" --changeset "\)CHANGESET" --module android --cm
+	  run: |
+	  # Install Unity Hub and resolve changeset via npx
+	  sudo apt-get update && sudo apt-get install -y unityhub xvfb
+	  CHANGESET=$(npx --yes unity-changeset "$UNITY_VERSION")
+	  xvfb-run --auto-servernum unityhub --no-sandbox -- --headless install --version "\(UNITY_VERSION" --changeset "\)CHANGESET" --module android --cm
 
       - name: Extract Matching Unity Android Runtime Libraries
         run: |
