@@ -1,766 +1,766 @@
 name: Build & Release Project Samba Installer
 
 on:
-  push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
-    inputs:
-      unity_version:
-        description: 'Exact Unity Editor Version (e.g., 2022.3.15f1)'
-        required: true
-        default: '2022.3.15f1'
+push:
+tags:
+- 'v*'
+workflow_dispatch:
+inputs:
+unity_version:
+description: 'Exact Unity Editor Version (e.g., 2022.3.15f1)'
+required: true
+default: '2022.3.15f1'
 
 permissions:
-  contents: write
+contents: write
 
 jobs:
-  build-android-shell:
-    runs-on: ubuntu-latest
-    env:
-      UNITY_VERSION: ${{ github.event.inputs.unity_version || '2022.3.15f1' }}
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-
-      - name: Install Unity Editor & Android Build Support
-  run: |
-    sudo apt-get update
-    sudo apt-get install -y ca-certificates curl gnupg xvfb
-
-    sudo install -d -m 0755 /etc/apt/keyrings
-    curl -fsSL https://hub.unity3d.com/linux/keys/public \
-      | sudo gpg --dearmor --yes -o /etc/apt/keyrings/Unity_Technologies_ApS.gpg
-    sudo chmod a+r /etc/apt/keyrings/Unity_Technologies_ApS.gpg
-
-    echo "deb [signed-by=/etc/apt/keyrings/Unity_Technologies_ApS.gpg] https://hub.unity3d.com/linux/repos/deb stable main" \
-      | sudo tee /etc/apt/sources.list.d/unityhub.list
-
-    sudo apt-get update
-    sudo apt-get install -y unityhub
-
-    CHANGESET="$(npx --yes unity-changeset "$UNITY_VERSION" | awk 'NF{print $NF}')"
-    xvfb-run --auto-servernum unityhub -- --headless install \
-      --version "$UNITY_VERSION" \
-      --changeset "$CHANGESET" \
-      --module android \
-      --childModules
-
-      - name: Extract Matching Unity Android Runtime Libraries
-        run: |
-          mkdir -p android-wrapper/app/src/main/jniLibs/arm64-v8a
-          mkdir -p android-wrapper/app/src/main/libs
-
-          PLAYBACK_DIR="/root/Unity/Hub/Editor/$UNITY_VERSION/Editor/Data/PlaybackEngines/AndroidPlayer"
-          if [ ! -d "$PLAYBACK_DIR" ]; then
-            PLAYBACK_DIR="$HOME/Unity/Hub/Editor/$UNITY_VERSION/Editor/Data/PlaybackEngines/AndroidPlayer"
-          fi
-
-          echo "Extracting Unity Android runtime from: $PLAYBACK_DIR"
-          # Copy ARM64 IL2CPP Release runtime libraries (libunity.so & libmain.so)
-          find "$PLAYBACK_DIR/Variations/il2cpp/Release/Libs/arm64-v8a" -name "*.so" -exec cp {} android-wrapper/app/src/main/jniLibs/arm64-v8a/ \;
-          # Copy matching unity-classes.jar
-          find "$PLAYBACK_DIR/Variations/il2cpp/Release/Classes" -name "classes.jar" -exec cp {} android-wrapper/app/src/main/libs/unity-classes.jar \;
-
-          ls -la android-wrapper/app/src/main/jniLibs/arm64-v8a/
-          ls -la android-wrapper/app/src/main/libs/
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.4'
-
-      - name: Generate Android Wrapper & Full Mach-O NDK Shim
-        run: |
-          mkdir -p android-wrapper/app/src/main/cpp
-
-          cat << 'EOF' > android-wrapper/settings.gradle
-          pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
-          }
-          dependencyResolutionManagement {
-              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-          rootProject.name = "SambaAndroidWrapper"
-          include ':app'
-          EOF
-
-          cat << 'EOF' > android-wrapper/build.gradle
-          plugins {
-              id 'com.android.application' version '8.2.2' apply false
-          }
-          EOF
-
-          cat << 'EOF' > android-wrapper/gradle.properties
-          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
-          android.useAndroidX=true
-          EOF
-
-          cat << 'EOF' > android-wrapper/app/build.gradle
-          plugins {
-              id 'com.android.application'
-          }
-
-          android {
-              namespace 'com.samba.port.android'
-              compileSdk 34
-
-              defaultConfig {
-                  applicationId "com.samba.port.android"
-                  minSdk 24
-                  targetSdk 34
-                  versionCode 1
-                  versionName "1.0"
-                  ndk {
-                      abiFilters 'arm64-v8a'
-                  }
-              }
-
-              externalNativeBuild {
-                  cmake {
-                      path "src/main/cpp/CMakeLists.txt"
-                      version "3.22.1"
-                  }
-              }
-
-              buildTypes {
-                  release {
-                      minifyEnabled false
-                  }
-              }
-
-              packaging {
-                  jniLibs {
-                      useLegacyPackaging = true
-                  }
-              }
-          }
-
-          dependencies {
-              implementation fileTree(dir: 'src/main/libs', include: ['*.jar'])
-          }
-          EOF
-
-          cat << 'EOF' > android-wrapper/app/src/main/AndroidManifest.xml
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              android:versionCode="1"
-              android:versionName="1.0">
-
-              <uses-permission android:name="android.permission.INTERNET" />
-              <uses-permission android:name="android.permission.VIBRATE" />
-              <uses-feature android:glEsVersion="0x00030000" android:required="true" />
-
-              <application
-                  android:label="Samba de Amigo"
-                  android:extractNativeLibs="true"
-                  android:hardwareAccelerated="true">
-
-                  <activity
-                      android:name="com.unity3d.player.UnityPlayerActivity"
-                      android:exported="true"
-                      android:screenOrientation="sensorLandscape"
-                      android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize|fontScale|layoutDirection|densi[...]
-                      android:launchMode="singleTask">
-
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </intent-filter>
-
-                      <meta-data android:name="unityplayer.UnityActivity" android:value="true" />
-                  </activity>
-
-                  <meta-data android:name="unity.splash-mode" android:value="0" />
-                  <meta-data android:name="unity.obb_in_assets" android:value="false" />
-              </application>
-          </manifest>
-          EOF
-
-          cat << 'EOF' > android-wrapper/app/src/main/cpp/CMakeLists.txt
-          cmake_minimum_required(VERSION 3.22.1)
-          project("il2cpp_shim")
-          set(CMAKE_CXX_STANDARD 17)
-          add_library(il2cpp SHARED macho_loader.cpp apple_stubs.cpp)
-          find_library(log-lib log)
-          target_link_libraries(il2cpp ${log-lib} dl)
-          EOF
-
-          cat << 'EOF' > android-wrapper/app/src/main/cpp/apple_stubs.cpp
-          #include <android/log.h>
-          #include <cstdlib>
-          #include <cstring>
-          #include <cstdio>
-          #include <pthread.h>
-          #include <dlfcn.h>
-
-          #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "SambaShim", __VA_ARGS__)
-
-          extern "C" {
-
-          // Objective-C Runtime & Apple Framework Stubs
-          void* objc_msgSend(void* self, const char* op, ...) { return nullptr; }
-          void* objc_getClass(const char* name) {
-              LOGI("ObjC Class Lookup: %s", name ? name : "null");
-              return (void*)0x1;
-          }
-          const char* sel_registerName(const char* str) { return str; }
-          void* objc_autoreleasePoolPush() { return nullptr; }
-          void objc_autoreleasePoolPop(void* pool) {}
-          void* objc_retain(void* obj) { return obj; }
-          void objc_release(void* obj) {}
-          void* objc_autoreleaseReturnValue(void* obj) { return obj; }
-
-          // Apple Arcade / GameKit Authentication Bypass
-          bool stub_GKLocalPlayer_isAuthenticated() {
-              LOGI("Bypassing GameKit auth check -> true");
-              return true;
-          }
-
-          // Resolve Apple symbol names to Android Bionic libc or Apple stubs
-          void* resolve_apple_symbol(const char* sym_name) {
-              if (!sym_name) return nullptr;
-              const char* clean_name = (sym_name[0] == '_') ? sym_name + 1 : sym_name;
-
-              if (strcmp(clean_name, "objc_msgSend") == 0) return (void*)objc_msgSend;
-              if (strcmp(clean_name, "objc_getClass") == 0) return (void*)objc_getClass;
-              if (strcmp(clean_name, "sel_registerName") == 0) return (void*)sel_registerName;
-              if (strcmp(clean_name, "objc_autoreleasePoolPush") == 0) return (void*)objc_autoreleasePoolPush;
-              if (strcmp(clean_name, "objc_autoreleasePoolPop") == 0) return (void*)objc_autoreleasePoolPop;
-              if (strcmp(clean_name, "objc_retain") == 0) return (void*)objc_retain;
-              if (strcmp(clean_name, "objc_release") == 0) return (void*)objc_release;
-
-              // Look up standard C/POSIX symbols in Android Bionic libc/libm/libdl
-              void* bionic_sym = dlsym(RTLD_DEFAULT, clean_name);
-              if (bionic_sym) return bionic_sym;
-
-              LOGI("Unresolved Apple symbol stubbed: %s", sym_name);
-              return (void*)objc_msgSend; // Safe no-op fallback
-          }
-
-          }
-          EOF
-
-          cat << 'EOF' > android-wrapper/app/src/main/cpp/macho_loader.cpp
-          #include <jni.h>
-          #include <sys/mman.h>
-          #include <sys/stat.h>
-          #include <fcntl.h>
-          #include <unistd.h>
-          #include <cstdint>
-          #include <cstring>
-          #include <vector>
-          #include <android/log.h>
-
-          #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "SambaShim", __VA_ARGS__)
-          #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "SambaShim", __VA_ARGS__)
-
-          // Mach-O 64-bit Structures
-          #define MH_MAGIC_64 0xfeedfacf
-          #define LC_SEGMENT_64 0x19
-          #define LC_SYMTAB 0x02
-          #define LC_DYLD_INFO_ONLY 0x80000022
-
-          struct mach_header_64 {
-              uint32_t magic;
-              int32_t cputype;
-              int32_t cpusubtype;
-              uint32_t filetype;
-              uint32_t ncmds;
-              uint32_t sizeofcmds;
-              uint32_t flags;
-              uint32_t reserved;
-          };
-
-          struct load_command {
-              uint32_t cmd;
-              uint32_t cmdsize;
-          };
-
-          struct segment_command_64 {
-              uint32_t cmd;
-              uint32_t cmdsize;
-              char segname[16];
-              uint64_t vmaddr;
-              uint64_t vmsize;
-              uint64_t fileoff;
-              uint64_t filesize;
-              int32_t maxprot;
-              int32_t initprot;
-              uint32_t nsects;
-              uint32_t flags;
-          };
-
-          struct nlist_64 {
-              uint32_t n_strx;
-              uint8_t n_type;
-              uint8_t n_sect;
-              uint16_t n_desc;
-              uint64_t n_value;
-          };
-
-          extern "C" void* resolve_apple_symbol(const char* sym_name);
-
-          static uint8_t* g_mapped_base = nullptr;
-          static uint64_t g_min_vmaddr = UINT64_MAX;
-          static uint64_t g_max_vmaddr = 0;
-          static std::vector<uint8_t> g_raw_binary;
-
-          static uint64_t read_uleb128(const uint8_t*& p, const uint8_t* end) {
-              uint64_t result = 0;
-              int bit = 0;
-              while (p < end) {
-                  uint64_t slice = *p & 0x7f;
-                  result |= (slice << bit);
-                  bit += 7;
-                  if ((*p++ & 0x80) == 0) break;
-              }
-              return result;
-          }
-
-          static int64_t read_sleb128(const uint8_t*& p, const uint8_t* end) {
-              int64_t result = 0;
-              int bit = 0;
-              uint8_t byte = 0;
-              while (p < end) {
-                  byte = *p++;
-                  result |= ((int64_t)(byte & 0x7f)) << bit;
-                  bit += 7;
-                  if ((byte & 0x80) == 0) break;
-              }
-              if ((byte & 0x40) && (bit < 64)) result |= (~0ULL << bit);
-              return result;
-          }
-
-          static void process_dyld_bind_opcodes(const uint8_t* start, size_t size, const std::vector<uint64_t>& seg_vmaddrs) {
-              const uint8_t* p = start;
-              const uint8_t* end = start + size;
-              uint8_t type = 0;
-              int seg_index = 0;
-              uint64_t seg_offset = 0;
-              const char* symbol_name = nullptr;
-
-              while (p < end) {
-                  uint8_t immediate = *p & 0x0F;
-                  uint8_t opcode = *p & 0xF0;
-                  p++;
-
-                  switch (opcode) {
-                      case 0x00: break; // BIND_OPCODE_DONE
-                      case 0x10: break; // BIND_OPCODE_SET_DYLIB_ORDINAL_IMM
-                      case 0x20: read_uleb128(p, end); break;
-                      case 0x30: break;
-                      case 0x40: // BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM
-                          symbol_name = reinterpret_cast<const char*>(p);
-                          while (p < end && *p != 0) p++;
-                          p++;
-                          break;
-                      case 0x50: type = immediate; break;
-                      case 0x60: read_sleb128(p, end); break;
-                      case 0x70: // BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB
-                          seg_index = immediate;
-                          seg_offset = read_uleb128(p, end);
-                          break;
-                      case 0x80: seg_offset += read_uleb128(p, end); break;
-                      case 0x90: // BIND_OPCODE_DO_BIND
-                          if (seg_index < (int)seg_vmaddrs.size() && symbol_name) {
-                              uint64_t target_vm = seg_vmaddrs[seg_index] + seg_offset;
-                              uintptr_t* ptr = reinterpret_cast<uintptr_t*>(g_mapped_base + (target_vm - g_min_vmaddr));
-                              *ptr = reinterpret_cast<uintptr_t>(resolve_apple_symbol(symbol_name));
-                          }
-                          seg_offset += sizeof(uintptr_t);
-                          break;
-                      case 0xA0:
-                          if (seg_index < (int)seg_vmaddrs.size() && symbol_name) {
-                              uint64_t target_vm = seg_vmaddrs[seg_index] + seg_offset;
-                              uintptr_t* ptr = reinterpret_cast<uintptr_t*>(g_mapped_base + (target_vm - g_min_vmaddr));
-                              *ptr = reinterpret_cast<uintptr_t>(resolve_apple_symbol(symbol_name));
-                          }
-                          seg_offset += read_uleb128(p, end) + sizeof(uintptr_t);
-                          break;
-                      case 0xB0:
-                          seg_offset += immediate * sizeof(uintptr_t);
-                          break;
-                      case 0xC0: {
-                          uint64_t count = read_uleb128(p, end);
-                          uint64_t skip = read_uleb128(p, end);
-                          void* resolved = resolve_apple_symbol(symbol_name);
-                          for (uint64_t i = 0; i < count; i++) {
-                              if (seg_index < (int)seg_vmaddrs.size()) {
-                                  uint64_t target_vm = seg_vmaddrs[seg_index] + seg_offset;
-                                  uintptr_t* ptr = reinterpret_cast<uintptr_t*>(g_mapped_base + (target_vm - g_min_vmaddr));
-                                  *ptr = reinterpret_cast<uintptr_t>(resolved);
-                              }
-                              seg_offset += skip + sizeof(uintptr_t);
-                          }
-                          break;
-                      }
-                      default: break;
-                  }
-              }
-          }
-
-          bool map_macho_binary(const char* filepath) {
-              int fd = open(filepath, O_RDONLY);
-              if (fd < 0) {
-                  LOGE("Cannot open UnityFramework at %s", filepath);
-                  return false;
-              }
-              struct stat st;
-              fstat(fd, &st);
-              g_raw_binary.resize(st.st_size);
-              read(fd, g_raw_binary.data(), st.st_size);
-              close(fd);
-
-              auto* hdr = reinterpret_cast<mach_header_64*>(g_raw_binary.data());
-              if (hdr->magic != MH_MAGIC_64) {
-                  LOGE("Invalid Mach-O 64 magic: 0x%x", hdr->magic);
-                  return false;
-              }
-
-              uint8_t* cmd_ptr = g_raw_binary.data() + sizeof(mach_header_64);
-              std::vector<segment_command_64*> segments;
-              std::vector<uint64_t> seg_vmaddrs;
-              uint32_t bind_off = 0, bind_size = 0, lazy_off = 0, lazy_size = 0;
-
-              for (uint32_t i = 0; i < hdr->ncmds; i++) {
-                  auto* lc = reinterpret_cast<load_command*>(cmd_ptr);
-                  if (lc->cmd == LC_SEGMENT_64) {
-                      auto* seg = reinterpret_cast<segment_command_64*>(cmd_ptr);
-                      segments.push_back(seg);
-                      seg_vmaddrs.push_back(seg->vmaddr);
-                      if (strcmp(seg->segname, "__PAGEZERO") != 0 && seg->vmsize > 0) {
-                          if (seg->vmaddr < g_min_vmaddr) g_min_vmaddr = seg->vmaddr;
-                          if (seg->vmaddr + seg->vmsize > g_max_vmaddr) g_max_vmaddr = seg->vmaddr + seg->vmsize;
-                      }
-                  } else if (lc->cmd == LC_DYLD_INFO_ONLY) {
-                      uint32_t* info = reinterpret_cast<uint32_t*>(cmd_ptr);
-                      bind_off = info[4]; bind_size = info[5];
-                      lazy_off = info[8]; lazy_size = info[9];
-                  }
-                  cmd_ptr += lc->cmdsize;
-              }
-
-              size_t total_vm_span = g_max_vmaddr - g_min_vmaddr;
-              g_mapped_base = static_cast<uint8_t*>(mmap(nullptr, total_vm_span, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
-              if (g_mapped_base == MAP_FAILED) {
-                  LOGE("mmap failed for total span %zu", total_vm_span);
-                  return false;
-              }
-
-              for (auto* seg : segments) {
-                  if (strcmp(seg->segname, "__PAGEZERO") == 0 || seg->filesize == 0) continue;
-                  memcpy(g_mapped_base + (seg->vmaddr - g_min_vmaddr), g_raw_binary.data() + seg->fileoff, seg->filesize);
-                  LOGI("Mapped segment %s -> VM 0x%llx (size 0x%llx)", seg->segname, (unsigned long long)seg->vmaddr, (unsigned long long)seg->vmsize);
-              }
-
-              if (bind_size > 0) process_dyld_bind_opcodes(g_raw_binary.data() + bind_off, bind_size, seg_vmaddrs);
-              if (lazy_size > 0) process_dyld_bind_opcodes(g_raw_binary.data() + lazy_off, lazy_size, seg_vmaddrs);
-
-              __builtin___clear_cache(reinterpret_cast<char*>(g_mapped_base), reinterpret_cast<char*>(g_mapped_base + total_vm_span));
-              LOGI("Mach-O mapping & symbol binding complete!");
-              return true;
-          }
-
-          void* find_macho_symbol(const char* target_sym) {
-              auto* hdr = reinterpret_cast<mach_header_64*>(g_raw_binary.data());
-              uint8_t* cmd_ptr = g_raw_binary.data() + sizeof(mach_header_64);
-              for (uint32_t i = 0; i < hdr->ncmds; i++) {
-                  auto* lc = reinterpret_cast<load_command*>(cmd_ptr);
-                  if (lc->cmd == LC_SYMTAB) {
-                      uint32_t* sym_cmd = reinterpret_cast<uint32_t*>(cmd_ptr);
-                      uint32_t symoff = sym_cmd[2], nsyms = sym_cmd[3], stroff = sym_cmd[4];
-                      auto* syms = reinterpret_cast<nlist_64*>(g_raw_binary.data() + symoff);
-                      const char* strs = reinterpret_cast<const char*>(g_raw_binary.data() + stroff);
-                      for (uint32_t s = 0; s < nsyms; s++) {
-                          const char* name = strs + syms[s].n_strx;
-                          if (strcmp(name, target_sym) == 0 && syms[s].n_value >= g_min_vmaddr) {
-                              return g_mapped_base + (syms[s].n_value - g_min_vmaddr);
-                          }
-                      }
-                  }
-                  cmd_ptr += lc->cmdsize;
-              }
-              return nullptr;
-          }
-
-          typedef int (*il2cpp_init_fn)(const char*);
-
-          extern "C" int il2cpp_init(const char* domain_name) {
-              LOGI("il2cpp_init triggered for domain: %s", domain_name);
-              const char* fw_path = "/data/data/com.samba.port.android/files/UnityFramework";
-              if (!map_macho_binary(fw_path)) {
-                  LOGE("Failed to load UnityFramework from %s", fw_path);
-                  return 0;
-              }
-              auto real_init = reinterpret_cast<il2cpp_init_fn>(find_macho_symbol("_il2cpp_init"));
-              if (real_init) {
-                  LOGI("Jumping to mapped Mach-O _il2cpp_init at %p", real_init);
-                  return real_init(domain_name);
-              }
-              LOGE("Could not find _il2cpp_init symbol in Mach-O table.");
-              return 0;
-          }
-          EOF
-
-      - name: Build Base Android Shell APK
-        working-directory: ./android-wrapper
-        run: gradle assembleRelease
-
-      - name: Upload Base Shell APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: base-shell-apk
-          path: android-wrapper/app/build/outputs/apk/release/app-release-unsigned.apk
-
-  build-windows-installer:
-    needs: build-android-shell
-    runs-on: windows-latest
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Prepare Bundled Directories
-        run: |
-          New-Item -ItemType Directory -Force -Path "installer/tools"
-          New-Item -ItemType Directory -Force -Path "installer/patches"
-
-      - name: Download Base Shell APK
-        uses: actions/download-artifact@v4
-        with:
-          name: base-shell-apk
-          path: installer/tools
-
-      - name: Rename Base Shell APK
-        run: Move-Item -Path "installer/tools/app-release-unsigned.apk" -Destination "installer/tools/base_shell.apk" -Force
-
-      - name: Generate Updated patcher.py
-        run: |
-          if (-not (Test-Path "installer/patcher.py")) {
-            @'
-          import os, sys, shutil, zipfile, urllib.request, subprocess, threading
-          import tkinter as tk
-          from tkinter import ttk, filedialog, messagebox
-
-          PACKAGE_NAME = "com.samba.port.android"
-          OBB_FILENAME = f"main.1.{PACKAGE_NAME}.obb"
-
-          TOOL_URLS = {
-              "xdelta3.exe": "https://github.com/jmacd/xdelta-gpl/releases/download/v3.1.0/xdelta3-3.1.0-x86_64.exe.zip",
-              "uber-apk-signer.jar": "https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar",
-              "jre.zip": "https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jre/hotspot/normal/eclipse"
-          }
-
-          def get_bundled_path(rel):
-              return os.path.join(getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__))), rel)
-
-          def get_tools_dir():
-              exe_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
-              d = os.path.join(exe_dir, "installer_tools")
-              os.makedirs(d, exist_ok=True)
-              return d
-
-          def download_file(url, dest, label, status_lbl, pbar):
-              def hook(b, bs, ts):
-                  if ts > 0:
-                      pct = min(100, int((b * bs * 100) / ts))
-                      pbar["value"] = pct
-                      status_lbl.config(text=f"{label} ({pct}%)")
-              pbar["value"] = 0
-              urllib.request.urlretrieve(url, dest, hook)
-              pbar["value"] = 100
-
-          def find_java(root_dir):
-              for r, _, files in os.walk(root_dir):
-                  if "java.exe" in files:
-                      return os.path.join(r, "java.exe")
-              return None
-
-          def ensure_tools(status_lbl, pbar):
-              tdir = get_tools_dir()
-              xd = os.path.join(tdir, "xdelta3.exe")
-              sg = os.path.join(tdir, "uber-apk-signer.jar")
-              jdir = os.path.join(tdir, "jre")
-
-              if not os.path.exists(xd):
-                  ztmp = os.path.join(tdir, "xd.zip")
-                  download_file(TOOL_URLS["xdelta3.exe"], ztmp, "Downloading xdelta3...", status_lbl, pbar)
-                  with zipfile.ZipFile(ztmp, 'r') as zf:
-                      for n in zf.namelist():
-                          if n.endswith(".exe"):
-                              with zf.open(n) as s, open(xd, "wb") as d:
-                                  shutil.copyfileobj(s, d)
-                              break
-                  os.remove(ztmp)
-
-              if not os.path.exists(sg):
-                  download_file(TOOL_URLS["uber-apk-signer.jar"], sg, "Downloading APK signer...", status_lbl, pbar)
-
-              java_exe = find_java(jdir)
-              if not java_exe:
-                  jzip = os.path.join(tdir, "jre.zip")
-                  download_file(TOOL_URLS["jre.zip"], jzip, "Downloading portable Java...", status_lbl, pbar)
-                  status_lbl.config(text="Extracting portable Java...")
-                  with zipfile.ZipFile(jzip, 'r') as zf:
-                      zf.extractall(jdir)
-                  os.remove(jzip)
-                  java_exe = find_java(jdir)
-
-              return xd, sg, java_exe
-
-          def build_from_ipa(ipa_path, status_lbl, pbar, btn):
-              out_dir = os.path.join(os.path.dirname(ipa_path), "Project Samba Android")
-              work_dir = os.path.join(out_dir, "_temp")
-              try:
-                  xd, sg, java_bin = ensure_tools(status_lbl, pbar)
-                  if os.path.exists(out_dir):
-                      shutil.rmtree(out_dir)
-                  os.makedirs(os.path.join(work_dir, "assets", "bin"), exist_ok=True)
-
-                  status_lbl.config(text="Step 1/4: Extracting Data & UnityFramework...")
-                  with zipfile.ZipFile(ipa_path, 'r') as ipa:
-                      members = ipa.namelist()
-                      if any("/SC_Info/" in m for m in members):
-                          raise ValueError("Encrypted .ipa detected (SC_Info found). Supply a decrypted .ipa.")
-
-                      targets = [m for m in members if (".app/Data/" in m or m.endswith("UnityFramework.framework/UnityFramework")) and not m.endswith("/")]
-                      if not targets:
-                          raise FileNotFoundError("Could not find Unity Data or UnityFramework inside .ipa.")
-
-                      for idx, m in enumerate(targets, 1):
-                          if ".app/Data/" in m:
-                              rel = m.split(".app/", 1)[1]
-                              dest = os.path.join(work_dir, "assets", "bin", rel)
-                          else:
-                              dest = os.path.join(work_dir, "assets", "bin", "UnityFramework")
-                          os.makedirs(os.path.dirname(dest), exist_ok=True)
-                          with ipa.open(m) as s, open(dest, "wb") as d:
-                              shutil.copyfileobj(s, d)
-                          if idx % 10 == 0 or idx == len(targets):
-                              pct = int((idx / len(targets)) * 100)
-                              pbar["value"] = pct
-                              status_lbl.config(text=f"Step 1/4: Extracting assets ({pct}%)...")
-
-                  pbar["value"] = 30
-                  status_lbl.config(text="Step 2/4: Applying xdelta3 patches...")
-                  patch_dir = get_bundled_path("patches")
-                  meta_patch = os.path.join(patch_dir, "metadata.xdelta")
-                  orig_meta = os.path.join(work_dir, "assets", "bin", "Data", "Managed", "Metadata", "global-metadata.dat")
-                  if os.path.exists(meta_patch) and os.path.exists(orig_meta):
-                      subprocess.run([xd, "-d", "-s", orig_meta, meta_patch, orig_meta + ".tmp"], check=True)
-                      os.replace(orig_meta + ".tmp", orig_meta)
-
-                  fw_patch = os.path.join(patch_dir, "unityframework.xdelta")
-                  orig_fw = os.path.join(work_dir, "assets", "bin", "UnityFramework")
-                  if os.path.exists(fw_patch) and os.path.exists(orig_fw):
-                      subprocess.run([xd, "-d", "-s", orig_fw, fw_patch, orig_fw + ".tmp"], check=True)
-                      os.replace(orig_fw + ".tmp", orig_fw)
-
-                  pbar["value"] = 60
-                  status_lbl.config(text="Step 3/4: Packing Android .obb...")
-                  obb_path = os.path.join(out_dir, OBB_FILENAME)
-                  with zipfile.ZipFile(obb_path, 'w', compression=zipfile.ZIP_STORED) as obb:
-                      for r, _, files in os.walk(os.path.join(work_dir, "assets")):
-                          for f in files:
-                              fp = os.path.join(r, f)
-                              obb.write(fp, os.path.relpath(fp, work_dir))
-
-                  pbar["value"] = 85
-                  status_lbl.config(text="Step 4/4: Signing Android APK...")
-                  temp_apk = os.path.join(work_dir, "SambaPort.apk")
-                  shutil.copy(get_bundled_path(os.path.join("tools", "base_shell.apk")), temp_apk)
-                  subprocess.run([java_bin, "-jar", sg, "--apks", temp_apk, "--out", out_dir], check=True)
-
-                  signed = os.path.join(out_dir, "SambaPort-aligned-debugSigned.apk")
-                  final_apk = os.path.join(out_dir, "SambaDeAmigo.apk")
-                  if os.path.exists(signed):
-                      os.rename(signed, final_apk)
-
-                  with open(os.path.join(out_dir, "install.txt"), "w", encoding="utf-8") as f:
-                      f.write(
-                          "=== Samba de Amigo Android Install Instructions ===\n\n"
-                          "1. Install SambaDeAmigo.apk on your Android device (do not open yet).\n"
-                          f"2. Navigate to Android/obb/ on your internal storage and create: {PACKAGE_NAME}\n"
-                          f"3. Copy {OBB_FILENAME} into Android/obb/{PACKAGE_NAME}/\n"
-                          "4. Launch the game!\n"
-                      )
-
-                  pbar["value"] = 100
-                  status_lbl.config(text="Complete! Opening output folder...")
-                  messagebox.showinfo("Success", f"Files generated in:\n{out_dir}")
-                  os.startfile(out_dir)
-              except Exception as e:
-                  status_lbl.config(text="Failed.")
-                  messagebox.showerror("Error", str(e))
-              finally:
-                  if os.path.exists(work_dir):
-                      shutil.rmtree(work_dir)
-                  btn.config(state=tk.NORMAL)
-
-          if __name__ == "__main__":
-              root = tk.Tk()
-              root.title("Project Samba Installer")
-              root.geometry("480x275")
-              root.resizable(False, False)
-              tk.Label(root, text="Project Samba — Android Port Installer", font=("Segoe UI", 12, "bold"), pady=10).pack()
-              tk.Label(root, text="Select your decrypted iOS .ipa file:", font=("Segoe UI", 9)).pack()
-              sel_var = tk.StringVar(value="No .ipa file selected")
-              tk.Label(root, textvariable=sel_var, fg="#555555", wraplength=440).pack(pady=4)
-              pbar = ttk.Progressbar(root, orient="horizontal", length=400, mode="determinate")
-              pbar.pack(pady=6)
-              slbl = tk.Label(root, text="Waiting for .ipa file...", fg="#0055AA")
-              slbl.pack(pady=4)
-              bf = tk.Frame(root)
-              bf.pack(pady=10)
-              ibtn = tk.Button(bf, text="Install", width=14, state=tk.DISABLED)
-              sbtn = tk.Button(bf, text="Select .ipa", width=14, command=lambda: [sel_var.set(f) or ibtn.config(state=tk.NORMAL) for f in [filedialog.askopenfilename(filetypes=[("iOS App", "*.ipa")])][...]
-              ibtn.config(command=lambda: [ibtn.config(state=tk.DISABLED), threading.Thread(target=build_from_ipa, args=(sel_var.get(), slbl, pbar, ibtn), daemon=True).start()])
-              sbtn.pack(side=tk.LEFT, padx=10)
-              ibtn.pack(side=tk.LEFT, padx=10)
-              root.mainloop()
-          '@ | Set-Content -Path "installer/patcher.py" -Encoding UTF8
-          }
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install PyInstaller
-        run: pip install pyinstaller
-
-      - name: Build ProjectSambaInstaller.exe
-        working-directory: ./installer
-        run: |
-          pyinstaller --onefile --windowed --name "ProjectSambaInstaller" `
-            --add-data "tools;tools" `
-            --add-data "patches;patches" `
-            patcher.py
-
-      - name: Upload Installer Artifact (for manual runs)
-        uses: actions/upload-artifact@v4
-        with:
-          name: ProjectSambaInstaller-Windows
-          path: installer/dist/ProjectSambaInstaller.exe
-
-      - name: Publish to GitHub Releases
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: installer/dist/ProjectSambaInstaller.exe
-          generate_release_notes: true
+build-android-shell:
+runs-on: ubuntu-latest
+env:
+UNITY_VERSION: ${{ github.event.inputs.unity_version || '2022.3.15f1' }}
+
+steps:  
+  - name: Checkout Repository  
+    uses: actions/checkout@v4  
+
+  - name: Set up JDK 17  
+    uses: actions/setup-java@v4  
+    with:  
+      java-version: '17'  
+      distribution: 'temurin'  
+
+  - name: Install Unity Editor & Android Build Support
+	run: |
+		sudo apt-get update
+		sudo apt-get install -y ca-certificates curl gnupg xvfb
+		
+		sudo install -d -m 0755 /etc/apt/keyrings  
+		curl -fsSL https://hub.unity3d.com/linux/keys/public \  
+		  | sudo gpg --dearmor --yes -o /etc/apt/keyrings/Unity_Technologies_ApS.gpg  
+		sudo chmod a+r /etc/apt/keyrings/Unity_Technologies_ApS.gpg  
+		
+		echo "deb [signed-by=/etc/apt/keyrings/Unity_Technologies_ApS.gpg] https://hub.unity3d.com/linux/repos/deb stable main" \  
+		  | sudo tee /etc/apt/sources.list.d/unityhub.list  
+		
+		sudo apt-get update  
+		sudo apt-get install -y unityhub  
+		
+		CHANGESET="$(npx --yes unity-changeset "$UNITY_VERSION" | awk 'NF{print $NF}')"  
+		xvfb-run --auto-servernum unityhub -- --headless install \  
+		  --version "$UNITY_VERSION" \  
+		  --changeset "$CHANGESET" \  
+		  --module android \  
+		  --childModules  
+
+  - name: Extract Matching Unity Android Runtime Libraries  
+    run: |  
+      mkdir -p android-wrapper/app/src/main/jniLibs/arm64-v8a  
+      mkdir -p android-wrapper/app/src/main/libs  
+
+      PLAYBACK_DIR="/root/Unity/Hub/Editor/$UNITY_VERSION/Editor/Data/PlaybackEngines/AndroidPlayer"  
+      if [ ! -d "$PLAYBACK_DIR" ]; then  
+        PLAYBACK_DIR="$HOME/Unity/Hub/Editor/$UNITY_VERSION/Editor/Data/PlaybackEngines/AndroidPlayer"  
+      fi  
+
+      echo "Extracting Unity Android runtime from: $PLAYBACK_DIR"  
+      # Copy ARM64 IL2CPP Release runtime libraries (libunity.so & libmain.so)  
+      find "$PLAYBACK_DIR/Variations/il2cpp/Release/Libs/arm64-v8a" -name "*.so" -exec cp {} android-wrapper/app/src/main/jniLibs/arm64-v8a/ \;  
+      # Copy matching unity-classes.jar  
+      find "$PLAYBACK_DIR/Variations/il2cpp/Release/Classes" -name "classes.jar" -exec cp {} android-wrapper/app/src/main/libs/unity-classes.jar \;  
+
+      ls -la android-wrapper/app/src/main/jniLibs/arm64-v8a/  
+      ls -la android-wrapper/app/src/main/libs/  
+
+  - name: Set up Gradle  
+    uses: gradle/actions/setup-gradle@v4  
+    with:  
+      gradle-version: '8.4'  
+
+  - name: Generate Android Wrapper & Full Mach-O NDK Shim  
+    run: |  
+      mkdir -p android-wrapper/app/src/main/cpp  
+
+      cat << 'EOF' > android-wrapper/settings.gradle  
+      pluginManagement {  
+          repositories {  
+              google()  
+              mavenCentral()  
+              gradlePluginPortal()  
+          }  
+      }  
+      dependencyResolutionManagement {  
+          repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)  
+          repositories {  
+              google()  
+              mavenCentral()  
+          }  
+      }  
+      rootProject.name = "SambaAndroidWrapper"  
+      include ':app'  
+      EOF  
+
+      cat << 'EOF' > android-wrapper/build.gradle  
+      plugins {  
+          id 'com.android.application' version '8.2.2' apply false  
+      }  
+      EOF  
+
+      cat << 'EOF' > android-wrapper/gradle.properties  
+      org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8  
+      android.useAndroidX=true  
+      EOF  
+
+      cat << 'EOF' > android-wrapper/app/build.gradle  
+      plugins {  
+          id 'com.android.application'  
+      }  
+
+      android {  
+          namespace 'com.samba.port.android'  
+          compileSdk 34  
+
+          defaultConfig {  
+              applicationId "com.samba.port.android"  
+              minSdk 24  
+              targetSdk 34  
+              versionCode 1  
+              versionName "1.0"  
+              ndk {  
+                  abiFilters 'arm64-v8a'  
+              }  
+          }  
+
+          externalNativeBuild {  
+              cmake {  
+                  path "src/main/cpp/CMakeLists.txt"  
+                  version "3.22.1"  
+              }  
+          }  
+
+          buildTypes {  
+              release {  
+                  minifyEnabled false  
+              }  
+          }  
+
+          packaging {  
+              jniLibs {  
+                  useLegacyPackaging = true  
+              }  
+          }  
+      }  
+
+      dependencies {  
+          implementation fileTree(dir: 'src/main/libs', include: ['*.jar'])  
+      }  
+      EOF  
+
+      cat << 'EOF' > android-wrapper/app/src/main/AndroidManifest.xml  
+      <?xml version="1.0" encoding="utf-8"?>  
+      <manifest xmlns:android="http://schemas.android.com/apk/res/android"  
+          android:versionCode="1"  
+          android:versionName="1.0">  
+
+          <uses-permission android:name="android.permission.INTERNET" />  
+          <uses-permission android:name="android.permission.VIBRATE" />  
+          <uses-feature android:glEsVersion="0x00030000" android:required="true" />  
+
+          <application  
+              android:label="Samba de Amigo"  
+              android:extractNativeLibs="true"  
+              android:hardwareAccelerated="true">  
+
+              <activity  
+                  android:name="com.unity3d.player.UnityPlayerActivity"  
+                  android:exported="true"  
+                  android:screenOrientation="sensorLandscape"  
+                  android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize|fontScale|layoutDirection|densi[...]  
+                  android:launchMode="singleTask">  
+
+                  <intent-filter>  
+                      <action android:name="android.intent.action.MAIN" />  
+                      <category android:name="android.intent.category.LAUNCHER" />  
+                  </intent-filter>  
+
+                  <meta-data android:name="unityplayer.UnityActivity" android:value="true" />  
+              </activity>  
+
+              <meta-data android:name="unity.splash-mode" android:value="0" />  
+              <meta-data android:name="unity.obb_in_assets" android:value="false" />  
+          </application>  
+      </manifest>  
+      EOF  
+
+      cat << 'EOF' > android-wrapper/app/src/main/cpp/CMakeLists.txt  
+      cmake_minimum_required(VERSION 3.22.1)  
+      project("il2cpp_shim")  
+      set(CMAKE_CXX_STANDARD 17)  
+      add_library(il2cpp SHARED macho_loader.cpp apple_stubs.cpp)  
+      find_library(log-lib log)  
+      target_link_libraries(il2cpp ${log-lib} dl)  
+      EOF  
+
+      cat << 'EOF' > android-wrapper/app/src/main/cpp/apple_stubs.cpp  
+      #include <android/log.h>  
+      #include <cstdlib>  
+      #include <cstring>  
+      #include <cstdio>  
+      #include <pthread.h>  
+      #include <dlfcn.h>  
+
+      #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "SambaShim", __VA_ARGS__)  
+
+      extern "C" {  
+
+      // Objective-C Runtime & Apple Framework Stubs  
+      void* objc_msgSend(void* self, const char* op, ...) { return nullptr; }  
+      void* objc_getClass(const char* name) {  
+          LOGI("ObjC Class Lookup: %s", name ? name : "null");  
+          return (void*)0x1;  
+      }  
+      const char* sel_registerName(const char* str) { return str; }  
+      void* objc_autoreleasePoolPush() { return nullptr; }  
+      void objc_autoreleasePoolPop(void* pool) {}  
+      void* objc_retain(void* obj) { return obj; }  
+      void objc_release(void* obj) {}  
+      void* objc_autoreleaseReturnValue(void* obj) { return obj; }  
+
+      // Apple Arcade / GameKit Authentication Bypass  
+      bool stub_GKLocalPlayer_isAuthenticated() {  
+          LOGI("Bypassing GameKit auth check -> true");  
+          return true;  
+      }  
+
+      // Resolve Apple symbol names to Android Bionic libc or Apple stubs  
+      void* resolve_apple_symbol(const char* sym_name) {  
+          if (!sym_name) return nullptr;  
+          const char* clean_name = (sym_name[0] == '_') ? sym_name + 1 : sym_name;  
+
+          if (strcmp(clean_name, "objc_msgSend") == 0) return (void*)objc_msgSend;  
+          if (strcmp(clean_name, "objc_getClass") == 0) return (void*)objc_getClass;  
+          if (strcmp(clean_name, "sel_registerName") == 0) return (void*)sel_registerName;  
+          if (strcmp(clean_name, "objc_autoreleasePoolPush") == 0) return (void*)objc_autoreleasePoolPush;  
+          if (strcmp(clean_name, "objc_autoreleasePoolPop") == 0) return (void*)objc_autoreleasePoolPop;  
+          if (strcmp(clean_name, "objc_retain") == 0) return (void*)objc_retain;  
+          if (strcmp(clean_name, "objc_release") == 0) return (void*)objc_release;  
+
+          // Look up standard C/POSIX symbols in Android Bionic libc/libm/libdl  
+          void* bionic_sym = dlsym(RTLD_DEFAULT, clean_name);  
+          if (bionic_sym) return bionic_sym;  
+
+          LOGI("Unresolved Apple symbol stubbed: %s", sym_name);  
+          return (void*)objc_msgSend; // Safe no-op fallback  
+      }  
+
+      }  
+      EOF  
+
+      cat << 'EOF' > android-wrapper/app/src/main/cpp/macho_loader.cpp  
+      #include <jni.h>  
+      #include <sys/mman.h>  
+      #include <sys/stat.h>  
+      #include <fcntl.h>  
+      #include <unistd.h>  
+      #include <cstdint>  
+      #include <cstring>  
+      #include <vector>  
+      #include <android/log.h>  
+
+      #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "SambaShim", __VA_ARGS__)  
+      #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "SambaShim", __VA_ARGS__)  
+
+      // Mach-O 64-bit Structures  
+      #define MH_MAGIC_64 0xfeedfacf  
+      #define LC_SEGMENT_64 0x19  
+      #define LC_SYMTAB 0x02  
+      #define LC_DYLD_INFO_ONLY 0x80000022  
+
+      struct mach_header_64 {  
+          uint32_t magic;  
+          int32_t cputype;  
+          int32_t cpusubtype;  
+          uint32_t filetype;  
+          uint32_t ncmds;  
+          uint32_t sizeofcmds;  
+          uint32_t flags;  
+          uint32_t reserved;  
+      };  
+
+      struct load_command {  
+          uint32_t cmd;  
+          uint32_t cmdsize;  
+      };  
+
+      struct segment_command_64 {  
+          uint32_t cmd;  
+          uint32_t cmdsize;  
+          char segname[16];  
+          uint64_t vmaddr;  
+          uint64_t vmsize;  
+          uint64_t fileoff;  
+          uint64_t filesize;  
+          int32_t maxprot;  
+          int32_t initprot;  
+          uint32_t nsects;  
+          uint32_t flags;  
+      };  
+
+      struct nlist_64 {  
+          uint32_t n_strx;  
+          uint8_t n_type;  
+          uint8_t n_sect;  
+          uint16_t n_desc;  
+          uint64_t n_value;  
+      };  
+
+      extern "C" void* resolve_apple_symbol(const char* sym_name);  
+
+      static uint8_t* g_mapped_base = nullptr;  
+      static uint64_t g_min_vmaddr = UINT64_MAX;  
+      static uint64_t g_max_vmaddr = 0;  
+      static std::vector<uint8_t> g_raw_binary;  
+
+      static uint64_t read_uleb128(const uint8_t*& p, const uint8_t* end) {  
+          uint64_t result = 0;  
+          int bit = 0;  
+          while (p < end) {  
+              uint64_t slice = *p & 0x7f;  
+              result |= (slice << bit);  
+              bit += 7;  
+              if ((*p++ & 0x80) == 0) break;  
+          }  
+          return result;  
+      }  
+
+      static int64_t read_sleb128(const uint8_t*& p, const uint8_t* end) {  
+          int64_t result = 0;  
+          int bit = 0;  
+          uint8_t byte = 0;  
+          while (p < end) {  
+              byte = *p++;  
+              result |= ((int64_t)(byte & 0x7f)) << bit;  
+              bit += 7;  
+              if ((byte & 0x80) == 0) break;  
+          }  
+          if ((byte & 0x40) && (bit < 64)) result |= (~0ULL << bit);  
+          return result;  
+      }  
+
+      static void process_dyld_bind_opcodes(const uint8_t* start, size_t size, const std::vector<uint64_t>& seg_vmaddrs) {  
+          const uint8_t* p = start;  
+          const uint8_t* end = start + size;  
+          uint8_t type = 0;  
+          int seg_index = 0;  
+          uint64_t seg_offset = 0;  
+          const char* symbol_name = nullptr;  
+
+          while (p < end) {  
+              uint8_t immediate = *p & 0x0F;  
+              uint8_t opcode = *p & 0xF0;  
+              p++;  
+
+              switch (opcode) {  
+                  case 0x00: break; // BIND_OPCODE_DONE  
+                  case 0x10: break; // BIND_OPCODE_SET_DYLIB_ORDINAL_IMM  
+                  case 0x20: read_uleb128(p, end); break;  
+                  case 0x30: break;  
+                  case 0x40: // BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM  
+                      symbol_name = reinterpret_cast<const char*>(p);  
+                      while (p < end && *p != 0) p++;  
+                      p++;  
+                      break;  
+                  case 0x50: type = immediate; break;  
+                  case 0x60: read_sleb128(p, end); break;  
+                  case 0x70: // BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB  
+                      seg_index = immediate;  
+                      seg_offset = read_uleb128(p, end);  
+                      break;  
+                  case 0x80: seg_offset += read_uleb128(p, end); break;  
+                  case 0x90: // BIND_OPCODE_DO_BIND  
+                      if (seg_index < (int)seg_vmaddrs.size() && symbol_name) {  
+                          uint64_t target_vm = seg_vmaddrs[seg_index] + seg_offset;  
+                          uintptr_t* ptr = reinterpret_cast<uintptr_t*>(g_mapped_base + (target_vm - g_min_vmaddr));  
+                          *ptr = reinterpret_cast<uintptr_t>(resolve_apple_symbol(symbol_name));  
+                      }  
+                      seg_offset += sizeof(uintptr_t);  
+                      break;  
+                  case 0xA0:  
+                      if (seg_index < (int)seg_vmaddrs.size() && symbol_name) {  
+                          uint64_t target_vm = seg_vmaddrs[seg_index] + seg_offset;  
+                          uintptr_t* ptr = reinterpret_cast<uintptr_t*>(g_mapped_base + (target_vm - g_min_vmaddr));  
+                          *ptr = reinterpret_cast<uintptr_t>(resolve_apple_symbol(symbol_name));  
+                      }  
+                      seg_offset += read_uleb128(p, end) + sizeof(uintptr_t);  
+                      break;  
+                  case 0xB0:  
+                      seg_offset += immediate * sizeof(uintptr_t);  
+                      break;  
+                  case 0xC0: {  
+                      uint64_t count = read_uleb128(p, end);  
+                      uint64_t skip = read_uleb128(p, end);  
+                      void* resolved = resolve_apple_symbol(symbol_name);  
+                      for (uint64_t i = 0; i < count; i++) {  
+                          if (seg_index < (int)seg_vmaddrs.size()) {  
+                              uint64_t target_vm = seg_vmaddrs[seg_index] + seg_offset;  
+                              uintptr_t* ptr = reinterpret_cast<uintptr_t*>(g_mapped_base + (target_vm - g_min_vmaddr));  
+                              *ptr = reinterpret_cast<uintptr_t>(resolved);  
+                          }  
+                          seg_offset += skip + sizeof(uintptr_t);  
+                      }  
+                      break;  
+                  }  
+                  default: break;  
+              }  
+          }  
+      }  
+
+      bool map_macho_binary(const char* filepath) {  
+          int fd = open(filepath, O_RDONLY);  
+          if (fd < 0) {  
+              LOGE("Cannot open UnityFramework at %s", filepath);  
+              return false;  
+          }  
+          struct stat st;  
+          fstat(fd, &st);  
+          g_raw_binary.resize(st.st_size);  
+          read(fd, g_raw_binary.data(), st.st_size);  
+          close(fd);  
+
+          auto* hdr = reinterpret_cast<mach_header_64*>(g_raw_binary.data());  
+          if (hdr->magic != MH_MAGIC_64) {  
+              LOGE("Invalid Mach-O 64 magic: 0x%x", hdr->magic);  
+              return false;  
+          }  
+
+          uint8_t* cmd_ptr = g_raw_binary.data() + sizeof(mach_header_64);  
+          std::vector<segment_command_64*> segments;  
+          std::vector<uint64_t> seg_vmaddrs;  
+          uint32_t bind_off = 0, bind_size = 0, lazy_off = 0, lazy_size = 0;  
+
+          for (uint32_t i = 0; i < hdr->ncmds; i++) {  
+              auto* lc = reinterpret_cast<load_command*>(cmd_ptr);  
+              if (lc->cmd == LC_SEGMENT_64) {  
+                  auto* seg = reinterpret_cast<segment_command_64*>(cmd_ptr);  
+                  segments.push_back(seg);  
+                  seg_vmaddrs.push_back(seg->vmaddr);  
+                  if (strcmp(seg->segname, "__PAGEZERO") != 0 && seg->vmsize > 0) {  
+                      if (seg->vmaddr < g_min_vmaddr) g_min_vmaddr = seg->vmaddr;  
+                      if (seg->vmaddr + seg->vmsize > g_max_vmaddr) g_max_vmaddr = seg->vmaddr + seg->vmsize;  
+                  }  
+              } else if (lc->cmd == LC_DYLD_INFO_ONLY) {  
+                  uint32_t* info = reinterpret_cast<uint32_t*>(cmd_ptr);  
+                  bind_off = info[4]; bind_size = info[5];  
+                  lazy_off = info[8]; lazy_size = info[9];  
+              }  
+              cmd_ptr += lc->cmdsize;  
+          }  
+
+          size_t total_vm_span = g_max_vmaddr - g_min_vmaddr;  
+          g_mapped_base = static_cast<uint8_t*>(mmap(nullptr, total_vm_span, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));  
+          if (g_mapped_base == MAP_FAILED) {  
+              LOGE("mmap failed for total span %zu", total_vm_span);  
+              return false;  
+          }  
+
+          for (auto* seg : segments) {  
+              if (strcmp(seg->segname, "__PAGEZERO") == 0 || seg->filesize == 0) continue;  
+              memcpy(g_mapped_base + (seg->vmaddr - g_min_vmaddr), g_raw_binary.data() + seg->fileoff, seg->filesize);  
+              LOGI("Mapped segment %s -> VM 0x%llx (size 0x%llx)", seg->segname, (unsigned long long)seg->vmaddr, (unsigned long long)seg->vmsize);  
+          }  
+
+          if (bind_size > 0) process_dyld_bind_opcodes(g_raw_binary.data() + bind_off, bind_size, seg_vmaddrs);  
+          if (lazy_size > 0) process_dyld_bind_opcodes(g_raw_binary.data() + lazy_off, lazy_size, seg_vmaddrs);  
+
+          __builtin___clear_cache(reinterpret_cast<char*>(g_mapped_base), reinterpret_cast<char*>(g_mapped_base + total_vm_span));  
+          LOGI("Mach-O mapping & symbol binding complete!");  
+          return true;  
+      }  
+
+      void* find_macho_symbol(const char* target_sym) {  
+          auto* hdr = reinterpret_cast<mach_header_64*>(g_raw_binary.data());  
+          uint8_t* cmd_ptr = g_raw_binary.data() + sizeof(mach_header_64);  
+          for (uint32_t i = 0; i < hdr->ncmds; i++) {  
+              auto* lc = reinterpret_cast<load_command*>(cmd_ptr);  
+              if (lc->cmd == LC_SYMTAB) {  
+                  uint32_t* sym_cmd = reinterpret_cast<uint32_t*>(cmd_ptr);  
+                  uint32_t symoff = sym_cmd[2], nsyms = sym_cmd[3], stroff = sym_cmd[4];  
+                  auto* syms = reinterpret_cast<nlist_64*>(g_raw_binary.data() + symoff);  
+                  const char* strs = reinterpret_cast<const char*>(g_raw_binary.data() + stroff);  
+                  for (uint32_t s = 0; s < nsyms; s++) {  
+                      const char* name = strs + syms[s].n_strx;  
+                      if (strcmp(name, target_sym) == 0 && syms[s].n_value >= g_min_vmaddr) {  
+                          return g_mapped_base + (syms[s].n_value - g_min_vmaddr);  
+                      }  
+                  }  
+              }  
+              cmd_ptr += lc->cmdsize;  
+          }  
+          return nullptr;  
+      }  
+
+      typedef int (*il2cpp_init_fn)(const char*);  
+
+      extern "C" int il2cpp_init(const char* domain_name) {  
+          LOGI("il2cpp_init triggered for domain: %s", domain_name);  
+          const char* fw_path = "/data/data/com.samba.port.android/files/UnityFramework";  
+          if (!map_macho_binary(fw_path)) {  
+              LOGE("Failed to load UnityFramework from %s", fw_path);  
+              return 0;  
+          }  
+          auto real_init = reinterpret_cast<il2cpp_init_fn>(find_macho_symbol("_il2cpp_init"));  
+          if (real_init) {  
+              LOGI("Jumping to mapped Mach-O _il2cpp_init at %p", real_init);  
+              return real_init(domain_name);  
+          }  
+          LOGE("Could not find _il2cpp_init symbol in Mach-O table.");  
+          return 0;  
+      }  
+      EOF  
+
+  - name: Build Base Android Shell APK  
+    working-directory: ./android-wrapper  
+    run: gradle assembleRelease  
+
+  - name: Upload Base Shell APK Artifact  
+    uses: actions/upload-artifact@v4  
+    with:  
+      name: base-shell-apk  
+      path: android-wrapper/app/build/outputs/apk/release/app-release-unsigned.apk
+
+build-windows-installer:
+needs: build-android-shell
+runs-on: windows-latest
+steps:
+- name: Checkout Repository
+uses: actions/checkout@v4
+
+- name: Prepare Bundled Directories  
+    run: |  
+      New-Item -ItemType Directory -Force -Path "installer/tools"  
+      New-Item -ItemType Directory -Force -Path "installer/patches"  
+
+  - name: Download Base Shell APK  
+    uses: actions/download-artifact@v4  
+    with:  
+      name: base-shell-apk  
+      path: installer/tools  
+
+  - name: Rename Base Shell APK  
+    run: Move-Item -Path "installer/tools/app-release-unsigned.apk" -Destination "installer/tools/base_shell.apk" -Force  
+
+  - name: Generate Updated patcher.py  
+    run: |  
+      if (-not (Test-Path "installer/patcher.py")) {  
+        @'  
+      import os, sys, shutil, zipfile, urllib.request, subprocess, threading  
+      import tkinter as tk  
+      from tkinter import ttk, filedialog, messagebox  
+
+      PACKAGE_NAME = "com.samba.port.android"  
+      OBB_FILENAME = f"main.1.{PACKAGE_NAME}.obb"  
+
+      TOOL_URLS = {  
+          "xdelta3.exe": "https://github.com/jmacd/xdelta-gpl/releases/download/v3.1.0/xdelta3-3.1.0-x86_64.exe.zip",  
+          "uber-apk-signer.jar": "https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar",  
+          "jre.zip": "https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jre/hotspot/normal/eclipse"  
+      }  
+
+      def get_bundled_path(rel):  
+          return os.path.join(getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__))), rel)  
+
+      def get_tools_dir():  
+          exe_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))  
+          d = os.path.join(exe_dir, "installer_tools")  
+          os.makedirs(d, exist_ok=True)  
+          return d  
+
+      def download_file(url, dest, label, status_lbl, pbar):  
+          def hook(b, bs, ts):  
+              if ts > 0:  
+                  pct = min(100, int((b * bs * 100) / ts))  
+                  pbar["value"] = pct  
+                  status_lbl.config(text=f"{label} ({pct}%)")  
+          pbar["value"] = 0  
+          urllib.request.urlretrieve(url, dest, hook)  
+          pbar["value"] = 100  
+
+      def find_java(root_dir):  
+          for r, _, files in os.walk(root_dir):  
+              if "java.exe" in files:  
+                  return os.path.join(r, "java.exe")  
+          return None  
+
+      def ensure_tools(status_lbl, pbar):  
+          tdir = get_tools_dir()  
+          xd = os.path.join(tdir, "xdelta3.exe")  
+          sg = os.path.join(tdir, "uber-apk-signer.jar")  
+          jdir = os.path.join(tdir, "jre")  
+
+          if not os.path.exists(xd):  
+              ztmp = os.path.join(tdir, "xd.zip")  
+              download_file(TOOL_URLS["xdelta3.exe"], ztmp, "Downloading xdelta3...", status_lbl, pbar)  
+              with zipfile.ZipFile(ztmp, 'r') as zf:  
+                  for n in zf.namelist():  
+                      if n.endswith(".exe"):  
+                          with zf.open(n) as s, open(xd, "wb") as d:  
+                              shutil.copyfileobj(s, d)  
+                          break  
+              os.remove(ztmp)  
+
+          if not os.path.exists(sg):  
+              download_file(TOOL_URLS["uber-apk-signer.jar"], sg, "Downloading APK signer...", status_lbl, pbar)  
+
+          java_exe = find_java(jdir)  
+          if not java_exe:  
+              jzip = os.path.join(tdir, "jre.zip")  
+              download_file(TOOL_URLS["jre.zip"], jzip, "Downloading portable Java...", status_lbl, pbar)  
+              status_lbl.config(text="Extracting portable Java...")  
+              with zipfile.ZipFile(jzip, 'r') as zf:  
+                  zf.extractall(jdir)  
+              os.remove(jzip)  
+              java_exe = find_java(jdir)  
+
+          return xd, sg, java_exe  
+
+      def build_from_ipa(ipa_path, status_lbl, pbar, btn):  
+          out_dir = os.path.join(os.path.dirname(ipa_path), "Project Samba Android")  
+          work_dir = os.path.join(out_dir, "_temp")  
+          try:  
+              xd, sg, java_bin = ensure_tools(status_lbl, pbar)  
+              if os.path.exists(out_dir):  
+                  shutil.rmtree(out_dir)  
+              os.makedirs(os.path.join(work_dir, "assets", "bin"), exist_ok=True)  
+
+              status_lbl.config(text="Step 1/4: Extracting Data & UnityFramework...")  
+              with zipfile.ZipFile(ipa_path, 'r') as ipa:  
+                  members = ipa.namelist()  
+                  if any("/SC_Info/" in m for m in members):  
+                      raise ValueError("Encrypted .ipa detected (SC_Info found). Supply a decrypted .ipa.")  
+
+                  targets = [m for m in members if (".app/Data/" in m or m.endswith("UnityFramework.framework/UnityFramework")) and not m.endswith("/")]  
+                  if not targets:  
+                      raise FileNotFoundError("Could not find Unity Data or UnityFramework inside .ipa.")  
+
+                  for idx, m in enumerate(targets, 1):  
+                      if ".app/Data/" in m:  
+                          rel = m.split(".app/", 1)[1]  
+                          dest = os.path.join(work_dir, "assets", "bin", rel)  
+                      else:  
+                          dest = os.path.join(work_dir, "assets", "bin", "UnityFramework")  
+                      os.makedirs(os.path.dirname(dest), exist_ok=True)  
+                      with ipa.open(m) as s, open(dest, "wb") as d:  
+                          shutil.copyfileobj(s, d)  
+                      if idx % 10 == 0 or idx == len(targets):  
+                          pct = int((idx / len(targets)) * 100)  
+                          pbar["value"] = pct  
+                          status_lbl.config(text=f"Step 1/4: Extracting assets ({pct}%)...")  
+
+              pbar["value"] = 30  
+              status_lbl.config(text="Step 2/4: Applying xdelta3 patches...")  
+              patch_dir = get_bundled_path("patches")  
+              meta_patch = os.path.join(patch_dir, "metadata.xdelta")  
+              orig_meta = os.path.join(work_dir, "assets", "bin", "Data", "Managed", "Metadata", "global-metadata.dat")  
+              if os.path.exists(meta_patch) and os.path.exists(orig_meta):  
+                  subprocess.run([xd, "-d", "-s", orig_meta, meta_patch, orig_meta + ".tmp"], check=True)  
+                  os.replace(orig_meta + ".tmp", orig_meta)  
+
+              fw_patch = os.path.join(patch_dir, "unityframework.xdelta")  
+              orig_fw = os.path.join(work_dir, "assets", "bin", "UnityFramework")  
+              if os.path.exists(fw_patch) and os.path.exists(orig_fw):  
+                  subprocess.run([xd, "-d", "-s", orig_fw, fw_patch, orig_fw + ".tmp"], check=True)  
+                  os.replace(orig_fw + ".tmp", orig_fw)  
+
+              pbar["value"] = 60  
+              status_lbl.config(text="Step 3/4: Packing Android .obb...")  
+              obb_path = os.path.join(out_dir, OBB_FILENAME)  
+              with zipfile.ZipFile(obb_path, 'w', compression=zipfile.ZIP_STORED) as obb:  
+                  for r, _, files in os.walk(os.path.join(work_dir, "assets")):  
+                      for f in files:  
+                          fp = os.path.join(r, f)  
+                          obb.write(fp, os.path.relpath(fp, work_dir))  
+
+              pbar["value"] = 85  
+              status_lbl.config(text="Step 4/4: Signing Android APK...")  
+              temp_apk = os.path.join(work_dir, "SambaPort.apk")  
+              shutil.copy(get_bundled_path(os.path.join("tools", "base_shell.apk")), temp_apk)  
+              subprocess.run([java_bin, "-jar", sg, "--apks", temp_apk, "--out", out_dir], check=True)  
+
+              signed = os.path.join(out_dir, "SambaPort-aligned-debugSigned.apk")  
+              final_apk = os.path.join(out_dir, "SambaDeAmigo.apk")  
+              if os.path.exists(signed):  
+                  os.rename(signed, final_apk)  
+
+              with open(os.path.join(out_dir, "install.txt"), "w", encoding="utf-8") as f:  
+                  f.write(  
+                      "=== Samba de Amigo Android Install Instructions ===\n\n"  
+                      "1. Install SambaDeAmigo.apk on your Android device (do not open yet).\n"  
+                      f"2. Navigate to Android/obb/ on your internal storage and create: {PACKAGE_NAME}\n"  
+                      f"3. Copy {OBB_FILENAME} into Android/obb/{PACKAGE_NAME}/\n"  
+                      "4. Launch the game!\n"  
+                  )  
+
+              pbar["value"] = 100  
+              status_lbl.config(text="Complete! Opening output folder...")  
+              messagebox.showinfo("Success", f"Files generated in:\n{out_dir}")  
+              os.startfile(out_dir)  
+          except Exception as e:  
+              status_lbl.config(text="Failed.")  
+              messagebox.showerror("Error", str(e))  
+          finally:  
+              if os.path.exists(work_dir):  
+                  shutil.rmtree(work_dir)  
+              btn.config(state=tk.NORMAL)  
+
+      if __name__ == "__main__":  
+          root = tk.Tk()  
+          root.title("Project Samba Installer")  
+          root.geometry("480x275")  
+          root.resizable(False, False)  
+          tk.Label(root, text="Project Samba — Android Port Installer", font=("Segoe UI", 12, "bold"), pady=10).pack()  
+          tk.Label(root, text="Select your decrypted iOS .ipa file:", font=("Segoe UI", 9)).pack()  
+          sel_var = tk.StringVar(value="No .ipa file selected")  
+          tk.Label(root, textvariable=sel_var, fg="#555555", wraplength=440).pack(pady=4)  
+          pbar = ttk.Progressbar(root, orient="horizontal", length=400, mode="determinate")  
+          pbar.pack(pady=6)  
+          slbl = tk.Label(root, text="Waiting for .ipa file...", fg="#0055AA")  
+          slbl.pack(pady=4)  
+          bf = tk.Frame(root)  
+          bf.pack(pady=10)  
+          ibtn = tk.Button(bf, text="Install", width=14, state=tk.DISABLED)  
+          sbtn = tk.Button(bf, text="Select .ipa", width=14, command=lambda: [sel_var.set(f) or ibtn.config(state=tk.NORMAL) for f in [filedialog.askopenfilename(filetypes=[("iOS App", "*.ipa")])][...]  
+          ibtn.config(command=lambda: [ibtn.config(state=tk.DISABLED), threading.Thread(target=build_from_ipa, args=(sel_var.get(), slbl, pbar, ibtn), daemon=True).start()])  
+          sbtn.pack(side=tk.LEFT, padx=10)  
+          ibtn.pack(side=tk.LEFT, padx=10)  
+          root.mainloop()  
+      '@ | Set-Content -Path "installer/patcher.py" -Encoding UTF8  
+      }  
+
+  - name: Set up Python 3.11  
+    uses: actions/setup-python@v5  
+    with:  
+      python-version: '3.11'  
+
+  - name: Install PyInstaller  
+    run: pip install pyinstaller  
+
+  - name: Build ProjectSambaInstaller.exe  
+    working-directory: ./installer  
+    run: |  
+      pyinstaller --onefile --windowed --name "ProjectSambaInstaller" `  
+        --add-data "tools;tools" `  
+        --add-data "patches;patches" `  
+        patcher.py  
+
+  - name: Upload Installer Artifact (for manual runs)  
+    uses: actions/upload-artifact@v4  
+    with:  
+      name: ProjectSambaInstaller-Windows  
+      path: installer/dist/ProjectSambaInstaller.exe  
+
+  - name: Publish to GitHub Releases  
+    if: startsWith(github.ref, 'refs/tags/')  
+    uses: softprops/action-gh-release@v2  
+    with:  
+      files: installer/dist/ProjectSambaInstaller.exe  
+      generate_release_notes: true
