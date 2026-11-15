@@ -29,8 +29,8 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-		  
-	- name: Install Unity Editor & Android Build Support
+
+      - name: Install Unity Editor & Android Build Support
         run: |
           wget -qO - https://unity3d.com | gpg --dearmor | sudo tee /usr/share/keyrings/Unity_Technologies_ApS.gpg > /dev/null
           sudo sh -c 'echo "deb [signed-by=/usr/share/keyrings/Unity_Technologies_ApS.gpg] https://unity3d.com stable main" > /etc/apt/sources.list.d/unityhub.list'
@@ -160,7 +160,7 @@ jobs:
                       android:name="com.unity3d.player.UnityPlayerActivity"
                       android:exported="true"
                       android:screenOrientation="sensorLandscape"
-                      android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize|fontScale|layoutDirection|density"
+                      android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize|fontScale|layoutDirection|densi[...]
                       android:launchMode="singleTask">
 
                       <intent-filter>
@@ -713,7 +713,7 @@ jobs:
               bf = tk.Frame(root)
               bf.pack(pady=10)
               ibtn = tk.Button(bf, text="Install", width=14, state=tk.DISABLED)
-              sbtn = tk.Button(bf, text="Select .ipa", width=14, command=lambda: [sel_var.set(f) or ibtn.config(state=tk.NORMAL) for f in [filedialog.askopenfilename(filetypes=[("iOS App", "*.ipa")])] if f])
+              sbtn = tk.Button(bf, text="Select .ipa", width=14, command=lambda: [sel_var.set(f) or ibtn.config(state=tk.NORMAL) for f in [filedialog.askopenfilename(filetypes=[("iOS App", "*.ipa")])][...]
               ibtn.config(command=lambda: [ibtn.config(state=tk.DISABLED), threading.Thread(target=build_from_ipa, args=(sel_var.get(), slbl, pbar, ibtn), daemon=True).start()])
               sbtn.pack(side=tk.LEFT, padx=10)
               ibtn.pack(side=tk.LEFT, padx=10)
