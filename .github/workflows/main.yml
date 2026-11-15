@@ -31,11 +31,12 @@ steps:
       distribution: 'temurin'  
 
 
-  - name: Install Unity Editor & Android Build Support 
-    uses: kuler90/setup-unity@v1
-    with:  
-      unity-version: ${{ env.UNITY_VERSION }}
-      unity-modules: android
+    - name: Install Unity Editor & Android Build Support
+      uses: kuler90/setup-unity@v1
+      with:
+          unity-version: ${{ env.UNITY_VERSION }}
+          unity-modules: android
+
 
   - name: Extract Matching Unity Android Runtime Libraries  
     run: |  
