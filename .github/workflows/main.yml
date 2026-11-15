@@ -32,11 +32,26 @@ jobs:
 
       - name: Install Unity Editor & Android Build Support
         run: |
-          wget -qO - https://unity3d.com | gpg --dearmor | sudo tee /usr/share/keyrings/Unity_Technologies_ApS.gpg > /dev/null
-          sudo sh -c 'echo "deb [signed-by=/usr/share/keyrings/Unity_Technologies_ApS.gpg] https://unity3d.com stable main" > /etc/apt/sources.list.d/unityhub.list'
-          sudo apt-get update && sudo apt-get install -y unityhub xvfb
+          sudo apt-get update
+          sudo apt-get install -y ca-certificates curl gnupg xvfb
+
+          sudo install -d -m 0755 /etc/apt/keyrings
+          curl -fsSL https://hub.unity3d.com/linux/keys/public \
+            | sudo gpg --dearmor --yes -o /etc/apt/keyrings/Unity_Technologies_ApS.gpg
+          sudo chmod a+r /etc/apt/keyrings/Unity_Technologies_ApS.gpg
+
+          echo "deb [signed-by=/etc/apt/keyrings/Unity_Technologies_ApS.gpg] https://hub.unity3d.com/linux/repos/deb stable main" \
+            | sudo tee /etc/apt/sources.list.d/unityhub.list
+
+          sudo apt-get update
+          sudo apt-get install -y unityhub
+
           CHANGESET=$(npx --yes unity-changeset "$UNITY_VERSION")
-          xvfb-run --auto-servernum unityhub --no-sandbox -- --headless install --version "$UNITY_VERSION" --changeset "$CHANGESET" --module android --cm
+          xvfb-run --auto-servernum unityhub --no-sandbox -- --headless install \
+            --version "$UNITY_VERSION" \
+            --changeset "$CHANGESET" \
+            --module android \
+            --childModules
 
       - name: Extract Matching Unity Android Runtime Libraries
         run: |
