@@ -29,28 +29,15 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-
-            - name: Install Unity Editor & Android Build Support
+		  
+	- name: Install Unity Editor & Android Build Support
         run: |
-          # Install Unity Hub and resolve the Unity changeset
-          sudo apt-get update
-          sudo apt-get install -y xvfb
-
-          # Resolve the exact Unity changeset
+          wget -qO - https://unity3d.com | gpg --dearmor | sudo tee /usr/share/keyrings/Unity_Technologies_ApS.gpg > /dev/null
+          sudo sh -c 'echo "deb [signed-by=/usr/share/keyrings/Unity_Technologies_ApS.gpg] https://unity3d.com stable main" > /etc/apt/sources.list.d/unityhub.list'
+          sudo apt-get update && sudo apt-get install -y unityhub xvfb
           CHANGESET=$(npx --yes unity-changeset "$UNITY_VERSION")
+          xvfb-run --auto-servernum unityhub --no-sandbox -- --headless install --version "$UNITY_VERSION" --changeset "$CHANGESET" --module android --cm
 
-          echo "Installing Unity $UNITY_VERSION"
-          echo "Changeset: $CHANGESET"
-
-          # Install Unity Editor with Android Build Support
-          xvfb-run --auto-servernum unityhub \
-            --no-sandbox \
-            --headless install \
-            --version "$UNITY_VERSION" \
-            --changeset "$CHANGESET" \
-            --module android \
-            --childModules
-			
       - name: Extract Matching Unity Android Runtime Libraries
         run: |
           mkdir -p android-wrapper/app/src/main/jniLibs/arm64-v8a
